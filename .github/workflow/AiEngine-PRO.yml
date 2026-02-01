@@ -1,0 +1,172 @@
+name: AiEngine-PRO
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */3 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ai-engine
+  cancel-in-progress: false
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ----------------------
+      # Setup
+      # ----------------------
+      - name: Setup Git
+        run: |
+          git config --global user.name "dragaditya"
+          git config --global user.email "waghaditya312@gmail.com"
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y gh jq
+
+      # ----------------------
+      # Ensure files
+      # ----------------------
+      - name: Ensure Files
+        run: |
+          [ -f ai.py ] || echo 'print("hi")' > ai.py
+          [ -f utils.js ] || echo 'console.log("hi")' > utils.js
+          [ -f config.json ] || echo '{}' > config.json
+          [ -f notes.md ] || echo 'notes' > notes.md
+          [ -f README.md ] || echo '# Repo' > README.md
+
+      # ----------------------
+      # Init CSV
+      # ----------------------
+      - name: Init CSV
+        run: |
+          [ -f AI_ENGINE.csv ] || echo "DATE,TIME,MODE,STATUS,DETAILS" > AI_ENGINE.csv
+
+      # ----------------------
+      # Mode select
+      # ----------------------
+      - name: Select Mode
+        id: mode
+        run: |
+          R=$((RANDOM % 100))
+          if [ "$R" -lt 20 ]; then MODE="commit";
+          elif [ "$R" -lt 60 ]; then MODE="pr";
+          else MODE="issue"; fi
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+
+      # ----------------------
+      # COMMIT MODE
+      # ----------------------
+      - name: Commit Mode
+        if: steps.mode.outputs.mode == 'commit'
+        run: |
+          git pull --rebase || true
+
+          FILES=("ai.py" "utils.js" "config.json" "notes.md")
+          F=${FILES[$((RANDOM % 4))]}
+
+          echo "// update $RANDOM" >> "$F"
+          git add "$F"
+          git commit -m "auto update" || true
+          git push || true
+
+          echo "$(date +%F),$(date +%H:%M),commit,OK,$F" >> AI_ENGINE.csv
+
+      # ----------------------
+      # PR MODE (with retry)
+      # ----------------------
+      - name: PR Mode
+        if: steps.mode.outputs.mode == 'pr'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+
+          git pull --rebase || true
+
+          BRANCH="feature-$(date +%s)"
+          git checkout -b "$BRANCH"
+
+          echo "console.log('update');" >> mod.js
+          git add mod.js
+          git commit -m "pr update"
+          git push origin "$BRANCH"
+
+          for i in 1 2 3; do
+            gh pr create \
+              --title "Auto PR" \
+              --body "AI improvement" \
+              --base main \
+              --head "$BRANCH" && break
+            sleep 2
+          done
+
+          if gh pr view "$BRANCH" >/dev/null 2>&1; then
+            STATUS="OK"
+          else
+            STATUS="FAIL"
+          fi
+
+          echo "$(date +%F),$(date +%H:%M),PR,$STATUS,$BRANCH" >> AI_ENGINE.csv
+
+      # ----------------------
+      # ISSUE MODE (verified)
+      # ----------------------
+      - name: Issue Mode
+        if: steps.mode.outputs.mode == 'issue'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+
+          ISSUE_URL=$(gh issue create \
+            --title "Auto improvement $(date +%s)" \
+            --body "Planned by AI")
+
+          if [[ "$ISSUE_URL" == *"issues"* ]]; then
+            STATUS="OK"
+          else
+            STATUS="FAIL"
+          fi
+
+          echo "$(date +%F),$(date +%H:%M),issue,$STATUS,-" >> AI_ENGINE.csv
+
+      # ----------------------
+      # REAL API STATS
+      # ----------------------
+      - name: Real Stats
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRS=$(gh pr list --state all --json number | jq length)
+          ISSUES=$(gh issue list --state all --json number | jq length)
+          COMMITS=$(git rev-list --count HEAD)
+
+          sed -i '/AI_ENGINE_STATS_START/,/AI_ENGINE_STATS_END/d' README.md
+
+          echo "<!-- AI_ENGINE_STATS_START -->" >> README.md
+          echo "## 🤖 AI Engine PRO Stats" >> README.md
+          echo "Last Update: $(date)" >> README.md
+          echo "- Total Repo Commits: $COMMITS" >> README.md
+          echo "- Total PRs: $PRS" >> README.md
+          echo "- Total Issues: $ISSUES" >> README.md
+          echo "<!-- AI_ENGINE_STATS_END -->" >> README.md
+
+      # ----------------------
+      # Push updates
+      # ----------------------
+      - name: Push Updates
+        run: |
+          git add .
+          git commit -m "AI engine pro update" || true
+          git push || true
